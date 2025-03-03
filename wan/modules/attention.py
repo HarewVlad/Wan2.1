@@ -13,6 +13,33 @@ try:
 except ModuleNotFoundError:
     FLASH_ATTN_2_AVAILABLE = False
 
+try:
+    from sageattention import sageattn
+
+    @torch.compiler.disable()
+    def sageattn_wrapper(
+            qkv_list,
+            attention_length
+        ):
+        q, k, v = qkv_list
+        padding_length = q.shape[0] - attention_length
+        q = q[:attention_length, :, : ].unsqueeze(0)
+        k = k[:attention_length, :, : ].unsqueeze(0)
+        v = v[:attention_length, :, : ].unsqueeze(0)
+
+        o = sageattn(q, k, v, tensor_layout="NHD").squeeze(0)
+        del q, k ,v
+        qkv_list.clear()
+
+        if padding_length > 0:
+            o = torch.cat([o, torch.empty((padding_length, *o.shape[-2:]), dtype= o.dtype, device=o.device)], 0)
+
+        return o
+
+    SAGE_ATTN_2_AVAILABLE = True
+except ModuleNotFoundError:
+    SAGE_ATTN_2_AVAILABLE = False
+
 import warnings
 
 __all__ = [
@@ -91,7 +118,11 @@ def flash_attention(
         )
 
     # apply attention
-    if (version is None or version == 3) and FLASH_ATTN_3_AVAILABLE:
+    if SAGE_ATTN_2_AVAILABLE:
+        qkv_list = [q, k, v]
+        del q, k, v
+        x = sageattn_wrapper(qkv_list, lq).unsqueeze(0)
+    elif (version is None or version == 3) and FLASH_ATTN_3_AVAILABLE:
         # Note: dropout_p, window_size are not supported in FA3 now.
         x = flash_attn_interface.flash_attn_varlen_func(
             q=q,
@@ -145,7 +176,7 @@ def attention(
     dtype=torch.bfloat16,
     fa_version=None,
 ):
-    if FLASH_ATTN_2_AVAILABLE or FLASH_ATTN_3_AVAILABLE:
+    if FLASH_ATTN_2_AVAILABLE or FLASH_ATTN_3_AVAILABLE or SAGE_ATTN_2_AVAILABLE:
         return flash_attention(
             q=q,
             k=k,

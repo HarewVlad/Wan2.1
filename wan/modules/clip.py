@@ -8,6 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as T
 
+from accelerate import init_empty_weights
+
 from .attention import flash_attention
 from .tokenizers import HuggingfaceTokenizer
 from .xlm_roberta import XLMRoberta
@@ -445,7 +447,7 @@ def _clip(pretrained=False,
         model = model_cls(**kwargs)
 
     # set device
-    model = model.to(dtype=dtype, device=device)
+    # model = model.to(dtype=dtype, device=device)
     output = (model,)
 
     # init transforms
@@ -507,16 +509,17 @@ class CLIPModel:
         self.tokenizer_path = tokenizer_path
 
         # init model
-        self.model, self.transforms = clip_xlm_roberta_vit_h_14(
-            pretrained=False,
-            return_transforms=True,
-            return_tokenizer=False,
-            dtype=dtype,
-            device=device)
+        with init_empty_weights():
+            self.model, self.transforms = clip_xlm_roberta_vit_h_14(
+                pretrained=False,
+                return_transforms=True,
+                return_tokenizer=False,
+                dtype=dtype,
+                device=device)
         self.model = self.model.eval().requires_grad_(False)
         logging.info(f'loading {checkpoint_path}')
         self.model.load_state_dict(
-            torch.load(checkpoint_path, map_location='cpu'))
+            torch.load(checkpoint_path, map_location='cpu'), assign=True)
 
         # init tokenizer
         self.tokenizer = HuggingfaceTokenizer(
