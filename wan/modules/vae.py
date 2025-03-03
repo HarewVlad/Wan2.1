@@ -49,9 +49,11 @@ class RMS_norm(nn.Module):
         self.bias = nn.Parameter(torch.zeros(shape)) if bias else 0.
 
     def forward(self, x):
-        return F.normalize(
+        x = F.normalize(
             x, dim=(1 if self.channel_first else
                     -1)) * self.scale * self.gamma + self.bias
+        x = x.to(torch.bfloat16)
+        return x
 
 
 class Upsample(nn.Upsample):
@@ -212,11 +214,11 @@ class ResidualBlock(nn.Module):
                             cache_x.device), cache_x
                     ],
                                         dim=2)
-                x = layer(x, feat_cache[idx])
+                x = layer(x, feat_cache[idx]).to(torch.bfloat16)
                 feat_cache[idx] = cache_x
                 feat_idx[0] += 1
             else:
-                x = layer(x)
+                x = layer(x).to(torch.bfloat16)
         return x + h
 
 
