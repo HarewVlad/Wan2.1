@@ -49,6 +49,11 @@ class WanT2V:
         logging.info(f"Creating WanModel from {checkpoint_dir}")
         self.model = WanModel.from_pretrained(checkpoint_dir).to(self.device)
         self.model.eval().requires_grad_(False)
+        self.model = torch.compile(
+            self.model,
+            backend="inductor",
+            mode="default",
+        )
 
         if use_usp:
             from xfuser.core.distributed import get_sequence_parallel_world_size
@@ -119,6 +124,7 @@ class WanT2V:
 
                 # Model inference
                 self.model.to(self.device)
+
                 noise_pred_cond = self.model(latent_model_input, t=timestep_tensor, **arg_c)[0]
                 noise_pred_uncond = self.model(latent_model_input, t=timestep_tensor, **arg_null)[0]
 
