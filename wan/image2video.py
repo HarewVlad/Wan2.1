@@ -85,6 +85,11 @@ class WanI2V:
         logging.info(f"Creating WanModel from {checkpoint_dir}")
         self.model = WanModel.from_pretrained(checkpoint_dir)
         self.model.eval().requires_grad_(False)
+        self.model = torch.compile(
+            self.model,
+            backend="inductor",
+            mode="default",
+        )
 
         # Handle distributed training setup
         if t5_fsdp or dit_fsdp or use_usp:
