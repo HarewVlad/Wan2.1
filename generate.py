@@ -959,7 +959,7 @@ def generate(args):
             t5_cpu=args.t5_cpu,
         )
 
-        if args.lora_path is not None and rank == 0:  # Only apply on rank 0 in distributed setup
+        if args.lora_path is not None:
             logging.info(f"Applying LoRA from {args.lora_path}")
             wan_i2v.apply_lora(
                 args.lora_path,
