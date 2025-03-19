@@ -148,82 +148,167 @@ class WanI2V:
             # First frame is 1, rest are 0
             self._mask_buffer[:, 1:] = 0
 
+    # def apply_lora(self, lora_path, alpha=1.0, target_replace_module=None):
+    #     """
+    #     Apply LoRA weights to the model.
+
+    #     Args:
+    #         lora_path (str): Path to the LoRA weights in safetensors format
+    #         alpha (float): Scaling factor for LoRA weights
+    #         target_replace_module (dict, optional): Dictionary mapping module names to replace with LoRA
+    #     """
+    #     if not os.path.exists(lora_path):
+    #         logging.warning(f"LoRA file not found: {lora_path}")
+    #         return
+
+    #     logging.info(f"Loading LoRA weights from {lora_path}")
+    #     lora_state_dict = load_file(lora_path)
+
+    #     # Remove "diffusion_model." prefix from keys
+    #     clean_state_dict = {}
+    #     for key in lora_state_dict:
+    #         if key.startswith("diffusion_model."):
+    #             clean_key = key[len("diffusion_model."):]
+    #             clean_state_dict[clean_key] = lora_state_dict[key]
+    #         else:
+    #             clean_state_dict[key] = lora_state_dict[key]
+
+    #     # Apply LoRA weights
+    #     torch_dtype = self.model.device.type
+    #     self.model.to(self.device)  # Ensure model is on the correct device
+
+    #     # Create sets to track LoRA modules we've processed
+    #     processed_modules = set()
+
+    #     for name, value in self.model.named_parameters():
+    #         # Check if this is a base weight with a corresponding LoRA weight
+    #         if ".weight" in name:
+    #             lora_a_name = name.replace(".weight", ".lora_A.weight")
+    #             lora_b_name = name.replace(".weight", ".lora_B.weight")
+
+    #             if lora_a_name in clean_state_dict and lora_b_name in clean_state_dict:
+    #                 module_name = name[:name.rfind(".weight")]
+
+    #                 # Skip if we've already processed this module
+    #                 if module_name in processed_modules:
+    #                     continue
+
+    #                 # Skip if there's a target module filter and this module doesn't match
+    #                 if target_replace_module is not None and not any(
+    #                     x in module_name for x in target_replace_module
+    #                 ):
+    #                     continue
+
+    #                 # Get the base weight and LoRA weights
+    #                 lora_a = clean_state_dict[lora_a_name].to(value.device, value.dtype)
+    #                 lora_b = clean_state_dict[lora_b_name].to(value.device, value.dtype)
+
+    #                 # Apply LoRA: W = W + alpha * (A · B)
+    #                 delta = torch.mm(lora_b, lora_a) * alpha
+    #                 value.data += delta
+
+    #                 processed_modules.add(module_name)
+    #                 logging.info(f"Applied LoRA to {module_name}")
+
+    #     torch.cuda.empty_cache()
+    #     logging.info(f"Applied {len(processed_modules)} LoRA modules to model")
+
     def apply_lora(self, lora_path, alpha=1.0, target_replace_module=None):
         """
-        Apply LoRA weights to the model.
-
-        Args:
-            lora_path (str): Path to the LoRA weights in safetensors format
-            alpha (float): Scaling factor for LoRA weights
-            target_replace_module (dict, optional): Dictionary mapping module names to replace with LoRA
+        Apply LoRA weights to the model
         """
+        import time
+        from contextlib import nullcontext
+
+        start_time = time.time()
+
         if not os.path.exists(lora_path):
             logging.warning(f"LoRA file not found: {lora_path}")
-            return
+            return 0
 
+        # Load LoRA state dict with minimal logging
         logging.info(f"Loading LoRA weights from {lora_path}")
         lora_state_dict = load_file(lora_path)
 
-        # Remove "diffusion_model." prefix from keys
+        # Pre-process state dict to remove prefixes - do this once upfront
         clean_state_dict = {}
-        for key in lora_state_dict:
+        for key, tensor in lora_state_dict.items():
             if key.startswith("diffusion_model."):
-                clean_key = key[len("diffusion_model."):]
-                clean_state_dict[clean_key] = lora_state_dict[key]
-            else:
-                clean_state_dict[key] = lora_state_dict[key]
+                key = key[len("diffusion_model."):]
+            clean_state_dict[key] = tensor
 
-        # Apply LoRA weights
-        torch_dtype = self.model.device.type
-        self.model.to(self.device)  # Ensure model is on the correct device
+        # Move model to target device once
+        self.model.to(self.device)
 
-        # Create sets to track LoRA modules we've processed
-        processed_modules = set()
+        # Get parameter dictionary for O(1) lookups
+        param_dict = dict(self.model.named_parameters())
 
-        for name, param in self.model.named_parameters():
-            # Check if this is a base weight with a corresponding LoRA weight
-            if ".weight" in name:
-                lora_a_name = name.replace(".weight", ".lora_A.weight")
-                lora_b_name = name.replace(".weight", ".lora_B.weight")
+        # Identify all valid LoRA pairs upfront
+        lora_pairs = {}
+        for key in clean_state_dict:
+            if ".lora_A.weight" in key:
+                base_name = key.replace(".lora_A.weight", "")
+                lora_b_key = f"{base_name}.lora_B.weight"
+                weight_name = f"{base_name}.weight"
 
-                if lora_a_name in clean_state_dict and lora_b_name in clean_state_dict:
-                    module_name = name[:name.rfind(".weight")]
+                # Skip if not a valid LoRA pair
+                if lora_b_key not in clean_state_dict or weight_name not in param_dict:
+                    continue
 
-                    # Skip if we've already processed this module
-                    if module_name in processed_modules:
-                        continue
+                # Apply target module filter if provided
+                if target_replace_module is not None and not any(x in base_name for x in target_replace_module):
+                    continue
 
-                    # Skip if there's a target module filter and this module doesn't match
-                    if target_replace_module is not None and not any(
-                        x in module_name for x in target_replace_module
-                    ):
-                        continue
+                # Store for processing
+                weight = param_dict[weight_name]
+                lora_pairs[base_name] = (
+                    clean_state_dict[key],
+                    clean_state_dict[lora_b_key],
+                    weight
+                )
 
-                    # Get the base weight and LoRA weights
-                    weight = param
-                    lora_a = clean_state_dict[lora_a_name].to(weight.device, weight.dtype)
-                    lora_b = clean_state_dict[lora_b_name].to(weight.device, weight.dtype)
+        # Set up CUDA streams for parallel processing if available
+        streams = {}
+        if torch.cuda.is_available():
+            num_streams = min(4, len(lora_pairs))
+            for i in range(num_streams):
+                streams[i] = torch.cuda.Stream()
 
-                    # Apply LoRA: W = W + alpha * (A · B)
+        # Process LoRA pairs efficiently with streams
+        processed_count = 0
+        for i, (base_name, (lora_a, lora_b, weight)) in enumerate(lora_pairs.items()):
+            # Determine which stream to use for parallel execution
+            stream_idx = i % len(streams) if streams else None
+            stream = streams.get(stream_idx) if stream_idx is not None else None
+
+            # Use appropriate context manager
+            ctx = torch.cuda.stream(stream) if stream else nullcontext()
+
+            with ctx:
+                # Move tensors to device efficiently with non-blocking transfers
+                lora_a = lora_a.to(weight.device, weight.dtype, non_blocking=True)
+                lora_b = lora_b.to(weight.device, weight.dtype, non_blocking=True)
+
+                # Apply LoRA update in-place with optimized computation
+                with torch.no_grad():  # Prevent unnecessary gradient tracking
                     delta = torch.mm(lora_b, lora_a) * alpha
 
-                    # Check if shapes are compatible for direct addition
-                    if weight.shape == delta.shape:
-                        # Direct addition for 2D weights
-                        weight.data += delta
-                    elif len(weight.shape) == 4 and len(delta.shape) == 2:
-                        # For Conv2D weights: reshape delta to match
-                        delta_reshaped = delta.reshape(weight.shape)
-                        weight.data += delta_reshaped
-                    else:
-                        logging.warning(f"Shape mismatch for {name}: {weight.shape} vs {delta.shape}")
-                        continue
+                    weight.data.add_(delta)  # In-place addition
 
-                    processed_modules.add(module_name)
-                    logging.info(f"Applied LoRA to {module_name}")
+                processed_count += 1
 
-        torch.cuda.empty_cache()
-        logging.info(f"Applied {len(processed_modules)} LoRA modules to model")
+        # Synchronize all streams when done
+        if streams:
+            torch.cuda.synchronize()
+
+        # Clean up GPU memory only if needed
+        if processed_count > 0:
+            torch.cuda.empty_cache()
+
+        elapsed_time = time.time() - start_time
+        logging.info(f"Applied {processed_count} LoRA modules in {elapsed_time:.2f}s")
+
+        return processed_count
 
     def generate(self,
                  input_prompt,
