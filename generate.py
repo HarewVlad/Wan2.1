@@ -741,6 +741,16 @@ def _parse_args():
         action="store_true",
         default=False,
         help="Using Retention Steps will result in faster generation speed and better generation quality.")
+    parser.add_argument(
+        "--lora_path",
+        type=str,
+        default=None,
+        help="Path to the LoRA weights file.")
+    parser.add_argument(
+        "--lora_alpha",
+        type=float,
+        default=1.0,
+        help="LoRA alpha scaling factor.")
         
 
     args = parser.parse_args()
@@ -948,6 +958,14 @@ def generate(args):
             use_usp=(args.ulysses_size > 1 or args.ring_size > 1),
             t5_cpu=args.t5_cpu,
         )
+
+        if args.lora_path is not None and rank == 0:  # Only apply on rank 0 in distributed setup
+            logging.info(f"Applying LoRA from {args.lora_path}")
+            wan_i2v.apply_lora(
+                args.lora_path,
+                args.lora_alpha,
+            )
+
         # TeaCache
         wan_i2v.__class__.generate = i2v_generate
         wan_i2v.model.__class__.enable_teacache = True

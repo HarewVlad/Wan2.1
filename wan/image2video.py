@@ -6,6 +6,7 @@ import random
 import sys
 from contextlib import contextmanager
 from functools import partial
+import types
 
 import numpy as np
 import torch
@@ -13,6 +14,7 @@ import torch.cuda.amp as amp
 import torch.distributed as dist
 import torchvision.transforms.functional as TF
 from tqdm import tqdm
+from safetensors.torch import load_file
 
 from .distributed.fsdp import shard_model
 from .modules.clip import CLIPModel
@@ -85,11 +87,6 @@ class WanI2V:
         logging.info(f"Creating WanModel from {checkpoint_dir}")
         self.model = WanModel.from_pretrained(checkpoint_dir)
         self.model.eval().requires_grad_(False)
-        # self.model = torch.compile(
-        #     self.model,
-        #     backend="inductor",
-        #     mode="default",
-        # )
 
         # Handle distributed training setup
         if t5_fsdp or dit_fsdp or use_usp:
@@ -150,6 +147,83 @@ class WanI2V:
                 device=device)
             # First frame is 1, rest are 0
             self._mask_buffer[:, 1:] = 0
+
+    def apply_lora(self, lora_path, alpha=1.0, target_replace_module=None):
+        """
+        Apply LoRA weights to the model.
+
+        Args:
+            lora_path (str): Path to the LoRA weights in safetensors format
+            alpha (float): Scaling factor for LoRA weights
+            target_replace_module (dict, optional): Dictionary mapping module names to replace with LoRA
+        """
+        if not os.path.exists(lora_path):
+            logging.warning(f"LoRA file not found: {lora_path}")
+            return
+
+        logging.info(f"Loading LoRA weights from {lora_path}")
+        lora_state_dict = load_file(lora_path)
+
+        # Remove "diffusion_model." prefix from keys
+        clean_state_dict = {}
+        for key in lora_state_dict:
+            if key.startswith("diffusion_model."):
+                clean_key = key[len("diffusion_model."):]
+                clean_state_dict[clean_key] = lora_state_dict[key]
+            else:
+                clean_state_dict[key] = lora_state_dict[key]
+
+        # Apply LoRA weights
+        torch_dtype = self.model.device.type
+        self.model.to(self.device)  # Ensure model is on the correct device
+
+        # Create sets to track LoRA modules we've processed
+        processed_modules = set()
+
+        for name, param in self.model.named_parameters():
+            # Check if this is a base weight with a corresponding LoRA weight
+            if ".weight" in name:
+                lora_a_name = name.replace(".weight", ".lora_A.weight")
+                lora_b_name = name.replace(".weight", ".lora_B.weight")
+
+                if lora_a_name in clean_state_dict and lora_b_name in clean_state_dict:
+                    module_name = name[:name.rfind(".weight")]
+
+                    # Skip if we've already processed this module
+                    if module_name in processed_modules:
+                        continue
+
+                    # Skip if there's a target module filter and this module doesn't match
+                    if target_replace_module is not None and not any(
+                        x in module_name for x in target_replace_module
+                    ):
+                        continue
+
+                    # Get the base weight and LoRA weights
+                    weight = param
+                    lora_a = clean_state_dict[lora_a_name].to(weight.device, weight.dtype)
+                    lora_b = clean_state_dict[lora_b_name].to(weight.device, weight.dtype)
+
+                    # Apply LoRA: W = W + alpha * (A · B)
+                    delta = torch.mm(lora_b, lora_a) * alpha
+
+                    # Check if shapes are compatible for direct addition
+                    if weight.shape == delta.shape:
+                        # Direct addition for 2D weights
+                        weight.data += delta
+                    elif len(weight.shape) == 4 and len(delta.shape) == 2:
+                        # For Conv2D weights: reshape delta to match
+                        delta_reshaped = delta.reshape(weight.shape)
+                        weight.data += delta_reshaped
+                    else:
+                        logging.warning(f"Shape mismatch for {name}: {weight.shape} vs {delta.shape}")
+                        continue
+
+                    processed_modules.add(module_name)
+                    logging.info(f"Applied LoRA to {module_name}")
+
+        torch.cuda.empty_cache()
+        logging.info(f"Applied {len(processed_modules)} LoRA modules to model")
 
     def generate(self,
                  input_prompt,
