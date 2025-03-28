@@ -384,6 +384,7 @@ class WanModel(ModelMixin, ConfigMixin):
                  window_size=(-1, -1),
                  qk_norm=True,
                  cross_attn_norm=True,
+                 slg_layers=[9],
                  eps=1e-6):
         r"""
         Initialize the diffusion model backbone.
@@ -440,6 +441,7 @@ class WanModel(ModelMixin, ConfigMixin):
         self.qk_norm = qk_norm
         self.cross_attn_norm = cross_attn_norm
         self.eps = eps
+        self.slg_layers = slg_layers
 
         # embeddings
         self.patch_embedding = nn.Conv3d(
@@ -560,7 +562,10 @@ class WanModel(ModelMixin, ConfigMixin):
             context=context,
             context_lens=context_lens)
 
-        for block in self.blocks:
+        for block_idx, block in enumerate(self.blocks):
+            if block_idx in self.slg_layers:
+                continue
+
             x = block(x, **kwargs)
 
         # head

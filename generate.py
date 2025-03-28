@@ -443,6 +443,7 @@ def teacache_forward(
     seq_len,
     clip_fea=None,
     y=None,
+    slg_layers=[9],
 ):
     r"""
     Forward pass through the diffusion model
@@ -568,7 +569,10 @@ def teacache_forward(
                 self.previous_residual_odd = x - ori_x
     
     else:
-        for block in self.blocks:
+        for block_idx, block in enumerate(self.blocks):
+            if block_idx in slg_layers:
+                continue
+
             x = block(x, **kwargs)
 
     # head
@@ -751,6 +755,21 @@ def _parse_args():
         type=float,
         default=1.0,
         help="LoRA alpha scaling factor.")
+    parser.add_argument(
+        "--slg_layers",
+        type=str,
+        default="9",
+        help="Layers to skip for SLG.")
+    parser.add_argument(
+        "--slg_start",
+        type=float,
+        default=0.0,
+        help="Percentage in to start SLG.")
+    parser.add_argument(
+        "--slg_end",
+        type=float,
+        default=1.0,
+        help="Percentage in to end SLG.")
         
 
     args = parser.parse_args()
@@ -875,7 +894,7 @@ def generate(args):
         )
 
         # TeaCache
-        wan_t2v.__class__.generate = t2v_generate
+        # wan_t2v.__class__.generate = t2v_generate
         wan_t2v.model.__class__.enable_teacache = True
         wan_t2v.model.__class__.forward = teacache_forward
         wan_t2v.model.__class__.cnt = 0
@@ -913,6 +932,9 @@ def generate(args):
             sampling_steps=args.sample_steps,
             guide_scale=args.sample_guide_scale,
             seed=args.base_seed,
+            slg_layers=[int(x) for x in args.slg_layers.split(",")],
+            slg_start=args.slg_start,
+            slg_end=args.slg_end,
             offload_model=args.offload_model)
 
     else:
@@ -1006,6 +1028,9 @@ def generate(args):
             sampling_steps=args.sample_steps,
             guide_scale=args.sample_guide_scale,
             seed=args.base_seed,
+            slg_layers=[int(x) for x in args.slg_layers.split(",")],
+            slg_start=args.slg_start,
+            slg_end=args.slg_end,
             offload_model=args.offload_model)
 
     if rank == 0:

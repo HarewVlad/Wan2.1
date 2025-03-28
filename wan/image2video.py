@@ -153,6 +153,10 @@ class WanI2V:
                  n_prompt="",
                  seed=-1,
                  use_cfg_zero_star=True,
+                 cfg_zero_steps=5,
+                 slg_layers=[9],
+                 slg_start=0.0,
+                 sgl_end=1.0,
                  offload_model=True):
         r"""
         Generates video frames from input image and text prompt using diffusion process.
@@ -313,6 +317,10 @@ class WanI2V:
 
             self.model.to(self.device)
             for _, t in enumerate(tqdm(timesteps)):
+                current_slg_layers = None
+                if int(slg_start * sampling_steps) <= i < int(slg_end * sampling_steps):
+                    current_slg_layers = slg_layers
+
                 latent_model_input = [latent.to(self.device)]
                 timestep = [t]
 
@@ -324,7 +332,7 @@ class WanI2V:
                 if offload_model:
                     torch.cuda.empty_cache()
                 noise_pred_uncond = self.model(
-                    latent_model_input, t=timestep, **arg_null)[0].to(
+                    latent_model_input, t=timestep, slg_layers=current_slg_layers, **arg_null)[0].to(
                         torch.device('cpu') if offload_model else self.device)
                 if offload_model:
                     torch.cuda.empty_cache()
@@ -339,12 +347,12 @@ class WanI2V:
                     alpha = optimized_scale(positive_flat,negative_flat)
                     alpha = alpha.view(batch_size, 1, 1, 1)
 
-                    if (i <= zero_steps) and use_zero_init:
+                    if (i <= cfg_zero_steps):
                         noise_pred = noise_pred_text*0.
                     else:
-                        noise_pred = noise_pred_uncond * alpha + guidance_scale * (noise_pred_text - noise_pred_uncond * alpha)
+                        noise_pred = noise_pred_uncond * alpha + guide_scale * (noise_pred_text - noise_pred_uncond * alpha)
                 else:
-                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+                    noise_pred = noise_pred_uncond + guide_scale * (noise_pred_text - noise_pred_uncond)
                 #
 
                 latent = latent.to(

@@ -89,7 +89,22 @@ class WanT2V:
 
         self.sample_neg_prompt = config.sample_neg_prompt
 
-    def generate(self, input_prompt, size=(1280, 720), frame_num=81, shift=5.0, sample_solver='unipc', sampling_steps=50, guide_scale=5.0, n_prompt="", seed=-1, use_cfg_zero_star=True, offload_model=True):
+    def generate(self,
+                 input_prompt,
+                 size=(1280, 720),
+                 frame_num=81,
+                 shift=5.0,
+                 sample_solver='unipc',
+                 sampling_steps=50,
+                 guide_scale=5.0,
+                 n_prompt="",
+                 seed=-1,
+                 use_cfg_zero_star=True,
+                 cfg_zero_steps=5,
+                 slg_layers=[9],
+                 slg_start=0.0,
+                 slg_end=1.0,
+                 offload_model=True):
         F = frame_num
         target_shape = (self.vae.model.z_dim, (F - 1) // self.vae_stride[0] + 1, size[1] // self.vae_stride[1], size[0] // self.vae_stride[2])
 
@@ -132,18 +147,22 @@ class WanT2V:
 
             timestep_tensor = torch.zeros(1, dtype=torch.long, device=self.device)  # Pre-allocate a tensor for timestep
 
-            for t in tqdm(timesteps):
+            for i, t in enumerate(tqdm(timesteps)):
+                current_slg_layers = None
+                if int(slg_start * sampling_steps) <= i < int(slg_end * sampling_steps):
+                    current_slg_layers = slg_layers
+
                 timestep_tensor[0] = t  # Reuse pre-allocated tensor
                 latent_model_input = latents
 
                 self.model.to(self.device)
 
                 noise_pred_cond = self.model(latent_model_input, t=timestep_tensor, **arg_c)[0]
-                noise_pred_uncond = self.model(latent_model_input, t=timestep_tensor, **arg_null)[0]
+                noise_pred_uncond = self.model(latent_model_input, t=timestep_tensor, slg_layers=current_slg_layers, **arg_null)[0]
 
                 # https://github.com/WeichenFan/CFG-Zero-star/
-                noise_pred_text = noise_pred
-                batch_size = latent.shape[0]
+                noise_pred_text = noise_pred_cond
+                batch_size = len(latents)
                 if use_cfg_zero_star:
                     positive_flat = noise_pred_text.view(batch_size, -1)
                     negative_flat = noise_pred_uncond.view(batch_size, -1)
@@ -151,12 +170,12 @@ class WanT2V:
                     alpha = optimized_scale(positive_flat,negative_flat)
                     alpha = alpha.view(batch_size, 1, 1, 1)
 
-                    if (i <= zero_steps) and use_zero_init:
+                    if (i <= cfg_zero_steps):
                         noise_pred = noise_pred_text*0.
                     else:
-                        noise_pred = noise_pred_uncond * alpha + guidance_scale * (noise_pred_text - noise_pred_uncond * alpha)
+                        noise_pred = noise_pred_uncond * alpha + guide_scale * (noise_pred_text - noise_pred_uncond * alpha)
                 else:
-                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+                    noise_pred = noise_pred_uncond + guide_scale * (noise_pred_text - noise_pred_uncond)
                 #
 
                 temp_x0 = sample_scheduler.step(noise_pred.unsqueeze(0), t, latents[0].unsqueeze(0), return_dict=False, generator=seed_g)[0]
