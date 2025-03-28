@@ -770,7 +770,11 @@ def _parse_args():
         type=float,
         default=1.0,
         help="Percentage in to end SLG.")
-        
+    parser.add_argument(
+        "--use_cfg_zero_star",
+        action="store_true",
+        default=True,
+        help="Whether to use CFG-Zero.")
 
     args = parser.parse_args()
 
@@ -935,6 +939,7 @@ def generate(args):
             slg_layers=[int(x) for x in args.slg_layers.split(",")],
             slg_start=args.slg_start,
             slg_end=args.slg_end,
+            use_cfg_zero_star=args.use_cfg_zero_star,
             offload_model=args.offload_model)
 
     else:
@@ -1031,6 +1036,7 @@ def generate(args):
             slg_layers=[int(x) for x in args.slg_layers.split(",")],
             slg_start=args.slg_start,
             slg_end=args.slg_end,
+            use_cfg_zero_star=args.use_cfg_zero_star,
             offload_model=args.offload_model)
 
     if rank == 0:
