@@ -173,10 +173,9 @@ class WanT2V:
                     if (i <= cfg_zero_steps):
                         noise_pred = noise_pred_text*0.
                     else:
-                        noise_pred = noise_pred_uncond * alpha + guide_scale * (noise_pred_text - noise_pred_uncond * alpha)
-                else:
-                    noise_pred = noise_pred_uncond + guide_scale * (noise_pred_text - noise_pred_uncond)
+                        noise_pred_uncond *= alpha
                 #
+                noise_pred = noise_pred_uncond + guide_scale * (noise_pred_text - noise_pred_uncond)
 
                 temp_x0 = sample_scheduler.step(noise_pred.unsqueeze(0), t, latents[0].unsqueeze(0), return_dict=False, generator=seed_g)[0]
                 latents[0].copy_(temp_x0.squeeze(0))

@@ -989,7 +989,7 @@ def generate(args):
             )
 
         # TeaCache
-        wan_i2v.__class__.generate = i2v_generate
+        # wan_i2v.__class__.generate = i2v_generate
         wan_i2v.model.__class__.enable_teacache = True
         wan_i2v.model.__class__.forward = teacache_forward
         wan_i2v.model.__class__.cnt = 0
