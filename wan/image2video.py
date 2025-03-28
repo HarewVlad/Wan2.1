@@ -39,6 +39,7 @@ def optimized_scale(positive_flat, negative_flat):
     st_star = dot_product / squared_norm
     
     return st_star
+#
 
 class WanI2V:
 
@@ -151,6 +152,7 @@ class WanI2V:
                  guide_scale=5.0,
                  n_prompt="",
                  seed=-1,
+                 use_cfg_zero_star=True,
                  offload_model=True):
         r"""
         Generates video frames from input image and text prompt using diffusion process.
@@ -326,8 +328,24 @@ class WanI2V:
                         torch.device('cpu') if offload_model else self.device)
                 if offload_model:
                     torch.cuda.empty_cache()
-                noise_pred = noise_pred_uncond + guide_scale * (
-                    noise_pred_cond - noise_pred_uncond)
+
+                # https://github.com/WeichenFan/CFG-Zero-star/
+                noise_pred_text = noise_pred
+                batch_size = latent.shape[0]
+                if use_cfg_zero_star:
+                    positive_flat = noise_pred_text.view(batch_size, -1)
+                    negative_flat = noise_pred_uncond.view(batch_size, -1)
+
+                    alpha = optimized_scale(positive_flat,negative_flat)
+                    alpha = alpha.view(batch_size, 1, 1, 1)
+
+                    if (i <= zero_steps) and use_zero_init:
+                        noise_pred = noise_pred_text*0.
+                    else:
+                        noise_pred = noise_pred_uncond * alpha + guidance_scale * (noise_pred_text - noise_pred_uncond * alpha)
+                else:
+                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+                #
 
                 latent = latent.to(
                     torch.device('cpu') if offload_model else self.device)
