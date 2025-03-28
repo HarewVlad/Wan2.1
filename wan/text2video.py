@@ -22,6 +22,21 @@ from .utils.fm_solvers import (FlowDPMSolverMultistepScheduler,
                                get_sampling_sigmas, retrieve_timesteps)
 from .utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
 
+# https://github.com/WeichenFan/CFG-Zero-star
+def optimized_scale(positive_flat, negative_flat):
+
+    # Calculate dot production
+    dot_product = torch.sum(positive_flat * negative_flat, dim=1, keepdim=True)
+
+    # Squared norm of uncondition
+    squared_norm = torch.sum(negative_flat ** 2, dim=1, keepdim=True) + 1e-8
+
+    # st_star = v_cond^T * v_uncond / ||v_uncond||^2
+    st_star = dot_product / squared_norm
+
+    return st_star
+#
+
 class WanT2V:
 
     def __init__(self, config, checkpoint_dir, device_id=0, rank=0, t5_fsdp=False, dit_fsdp=False, use_usp=False, t5_cpu=False):
@@ -74,7 +89,7 @@ class WanT2V:
 
         self.sample_neg_prompt = config.sample_neg_prompt
 
-    def generate(self, input_prompt, size=(1280, 720), frame_num=81, shift=5.0, sample_solver='unipc', sampling_steps=50, guide_scale=5.0, n_prompt="", seed=-1, offload_model=True):
+    def generate(self, input_prompt, size=(1280, 720), frame_num=81, shift=5.0, sample_solver='unipc', sampling_steps=50, guide_scale=5.0, n_prompt="", seed=-1, use_cfg_zero_star=True, offload_model=True):
         F = frame_num
         target_shape = (self.vae.model.z_dim, (F - 1) // self.vae_stride[0] + 1, size[1] // self.vae_stride[1], size[0] // self.vae_stride[2])
 
@@ -98,7 +113,6 @@ class WanT2V:
 
         no_sync = getattr(self.model, 'no_sync', noop_no_sync)
 
-        # evaluation mode
         with amp.autocast(dtype=self.param_dtype), torch.no_grad(), no_sync():
             if sample_solver == 'unipc':
                 sample_scheduler = FlowUniPCMultistepScheduler(num_train_timesteps=self.num_train_timesteps, shift=1, use_dynamic_shifting=False)
@@ -122,18 +136,31 @@ class WanT2V:
                 timestep_tensor[0] = t  # Reuse pre-allocated tensor
                 latent_model_input = latents
 
-                # Model inference
                 self.model.to(self.device)
 
                 noise_pred_cond = self.model(latent_model_input, t=timestep_tensor, **arg_c)[0]
                 noise_pred_uncond = self.model(latent_model_input, t=timestep_tensor, **arg_null)[0]
 
-                # Noise prediction and sampling
-                noise_pred = noise_pred_uncond + guide_scale * (noise_pred_cond - noise_pred_uncond)
+                # https://github.com/WeichenFan/CFG-Zero-star/
+                noise_pred_text = noise_pred
+                batch_size = latent.shape[0]
+                if use_cfg_zero_star:
+                    positive_flat = noise_pred_text.view(batch_size, -1)
+                    negative_flat = noise_pred_uncond.view(batch_size, -1)
 
-                # In-place operation to reduce memory usage
+                    alpha = optimized_scale(positive_flat,negative_flat)
+                    alpha = alpha.view(batch_size, 1, 1, 1)
+
+                    if (i <= zero_steps) and use_zero_init:
+                        noise_pred = noise_pred_text*0.
+                    else:
+                        noise_pred = noise_pred_uncond * alpha + guidance_scale * (noise_pred_text - noise_pred_uncond * alpha)
+                else:
+                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+                #
+
                 temp_x0 = sample_scheduler.step(noise_pred.unsqueeze(0), t, latents[0].unsqueeze(0), return_dict=False, generator=seed_g)[0]
-                latents[0].copy_(temp_x0.squeeze(0))  # In-place copy
+                latents[0].copy_(temp_x0.squeeze(0))
 
             x0 = latents
             if offload_model:
