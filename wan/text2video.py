@@ -101,7 +101,7 @@ class WanT2V:
                  seed=-1,
                  use_cfg_zero_star=True,
                  cfg_zero_steps=5,
-                 slg_layers=[9],
+                 slg_layers=[],
                  slg_start=0.0,
                  slg_end=1.0,
                  offload_model=True):
@@ -148,7 +148,7 @@ class WanT2V:
             timestep_tensor = torch.zeros(1, dtype=torch.long, device=self.device)  # Pre-allocate a tensor for timestep
 
             for i, t in enumerate(tqdm(timesteps)):
-                current_slg_layers = None
+                current_slg_layers = []
                 if int(slg_start * sampling_steps) <= i < int(slg_end * sampling_steps):
                     current_slg_layers = slg_layers
 

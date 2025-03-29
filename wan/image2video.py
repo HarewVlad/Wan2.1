@@ -154,7 +154,7 @@ class WanI2V:
                  seed=-1,
                  use_cfg_zero_star=True,
                  cfg_zero_steps=5,
-                 slg_layers=[9],
+                 slg_layers=[],
                  slg_start=0.0,
                  slg_end=1.0,
                  offload_model=True):
@@ -317,7 +317,7 @@ class WanI2V:
 
             self.model.to(self.device)
             for i, t in enumerate(tqdm(timesteps)):
-                current_slg_layers = None
+                current_slg_layers = []
                 if int(slg_start * sampling_steps) <= i < int(slg_end * sampling_steps):
                     current_slg_layers = slg_layers
 

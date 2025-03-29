@@ -443,7 +443,7 @@ def teacache_forward(
     seq_len,
     clip_fea=None,
     y=None,
-    slg_layers=[9],
+    slg_layers=[],
 ):
     r"""
     Forward pass through the diffusion model
@@ -775,6 +775,11 @@ def _parse_args():
         action="store_true",
         default=True,
         help="Whether to use CFG-Zero.")
+    parser.add_argument(
+        "--use_slg",
+        action="store_true",
+        default=False,
+        help="Whether to use Skip Layer Guidance.")
 
     args = parser.parse_args()
 
@@ -927,6 +932,7 @@ def generate(args):
             wan_t2v.model.__class__.cutoff_steps = args.sample_steps*2 - 2
         logging.info(
             f"Generating {'image' if 't2i' in args.task else 'video'} ...")
+
         video = wan_t2v.generate(
             args.prompt,
             size=SIZE_CONFIGS[args.size],
@@ -936,7 +942,7 @@ def generate(args):
             sampling_steps=args.sample_steps,
             guide_scale=args.sample_guide_scale,
             seed=args.base_seed,
-            slg_layers=[int(x) for x in args.slg_layers.split(",")],
+            slg_layers=[int(x) for x in args.slg_layers.split(",")] if args.use_slg else [],
             slg_start=args.slg_start,
             slg_end=args.slg_end,
             use_cfg_zero_star=args.use_cfg_zero_star,
@@ -1033,7 +1039,7 @@ def generate(args):
             sampling_steps=args.sample_steps,
             guide_scale=args.sample_guide_scale,
             seed=args.base_seed,
-            slg_layers=[int(x) for x in args.slg_layers.split(",")],
+            slg_layers=[int(x) for x in args.slg_layers.split(",")] if args.use_slg else [],
             slg_start=args.slg_start,
             slg_end=args.slg_end,
             use_cfg_zero_star=args.use_cfg_zero_star,
